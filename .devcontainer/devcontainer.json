@@ -1,0 +1,25 @@
+{
+  "name": "kubasejdak python:3.14-26.04",
+  "image": "kubasejdak/python:3.14-26.04",
+  "mounts": [
+    "source=${localEnv:HOME}/.gitconfig,target=/home/ubuntu/.gitconfig,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.gitconfig-private,target=/home/ubuntu/.gitconfig-private,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.ssh,target=/home/ubuntu/.ssh,type=bind,consistency=cached"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "charliermarsh.ruff",
+        "davidanson.vscode-markdownlint",
+        "esbenp.prettier-vscode",
+        "hediet.vscode-drawio",
+        "mads-hartmann.bash-ide-vscode",
+        "ms-python.python",
+        "ms-vsliveshare.vsliveshare",
+        "waderyan.gitblame",
+        "yzhang.markdown-all-in-one"
+      ]
+    }
+  },
+  "runArgs": ["--network=host"]
+}
