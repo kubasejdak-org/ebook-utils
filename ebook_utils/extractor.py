@@ -1,63 +1,84 @@
-import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 import pypdf
 from ebooklib import epub
 
-from .models import EbookMetadata
+from .models import Confidence, EbookMetadata, ExtractionResult, MetadataEvidence, MetadataField
+from .naming import (
+    edition_from_path,
+    extract_edition_number,
+    format_edition,
+    parse_filename_metadata,
+    split_author_string,
+)
 
 _DC_NS = "http://purl.org/dc/elements/1.1/"
 _OPF_NS = "http://www.idpf.org/2007/opf"
 
-_WORD_TO_NUM = {
-    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
-    "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10,
+_NOISY_PDF_TITLES = {
+    "information box icon",
+    "new packt logo",
+    "packt_logo_ill 01_orange",
+    "quote",
 }
 
 
-def _extract_edition_number(text: str) -> int | None:
-    text_l = text.lower().strip()
-    for word, n in _WORD_TO_NUM.items():
-        if word in text_l:
-            return n
-    m = re.search(r'\b(\d+)(?:st|nd|rd|th)?\b', text_l)
-    if m:
-        return int(m.group(1))
-    return None
+def _clean_values(values: list[str]) -> list[str]:
+    return [value.strip() for value in values if value and value.strip()]
 
 
-def _edition_from_path(path: Path) -> int | None:
-    """Return edition number parsed from the file path, or None."""
-    path_text = " ".join(path.parts).lower()
-    m = re.search(
-        r'\b(?:(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)|(\d+)(?:st|nd|rd|th)?)\s+edition\b',
-        path_text,
+def _looks_like_asset_title(value: str) -> bool:
+    value_l = value.casefold().strip()
+    return (
+        value_l in _NOISY_PDF_TITLES
+        or value_l.endswith((".eps", ".ai", ".svg", ".psd"))
+        or "logo" in value_l
+        or " icon" in value_l
     )
-    if m:
-        return _WORD_TO_NUM.get(m.group(1)) if m.group(1) else int(m.group(2))
-    m = re.search(r'\bedition\s+(\d+)\b', path_text)
-    if m:
-        return int(m.group(1))
-    return None
-
-
-def _split_author_string(raw: str) -> list[str]:
-    """Split a raw author string on ';', ' and '/' & ', or ','."""
-    if ";" in raw:
-        parts = raw.split(";")
-    elif re.search(r'\s+(?:and|&)\s+', raw, re.IGNORECASE):
-        parts = re.split(r'\s+(?:and|&)\s+', raw, flags=re.IGNORECASE)
-    elif "," in raw:
-        parts = raw.split(",")
-    else:
-        return [raw.strip()]
-    return [p.strip() for p in parts if p.strip()]
 
 
 class EbookExtractor(ABC):
     @abstractmethod
     def extract(self, path: Path) -> EbookMetadata: ...
+
+    def extract_result(self, path: Path) -> ExtractionResult:
+        metadata = self.extract(path)
+        evidence: list[MetadataEvidence] = []
+        warnings: list[str] = []
+        source = path.suffix.lower().lstrip(".") or "unknown"
+
+        if metadata.title:
+            evidence.append(MetadataEvidence(MetadataField.TITLE, metadata.title, source, path, Confidence.HIGH))
+        if metadata.authors:
+            evidence.append(MetadataEvidence(MetadataField.AUTHORS, metadata.authors, source, path, Confidence.HIGH))
+        if metadata.edition_text:
+            evidence.append(
+                MetadataEvidence(MetadataField.EDITION, metadata.edition_text, source, path, Confidence.MEDIUM)
+            )
+        elif metadata.edition:
+            evidence.append(MetadataEvidence(MetadataField.EDITION, metadata.edition, source, path, Confidence.MEDIUM))
+
+        filename_title, filename_authors, filename_edition, filename_confidence = parse_filename_metadata(path)
+        if filename_title:
+            evidence.append(
+                MetadataEvidence(MetadataField.TITLE, filename_title, "filename", path, filename_confidence)
+            )
+        if filename_authors:
+            evidence.append(
+                MetadataEvidence(MetadataField.AUTHORS, filename_authors, "filename", path, filename_confidence)
+            )
+        if filename_edition:
+            evidence.append(
+                MetadataEvidence(MetadataField.EDITION, filename_edition, "filename", path, Confidence.MEDIUM)
+            )
+
+        if not metadata.title:
+            warnings.append("No embedded title found; filename will be used as fallback.")
+        if not metadata.authors:
+            warnings.append("No embedded authors found; filename or AI review may be needed.")
+
+        return ExtractionResult(path=path, format=source, metadata=metadata, evidence=evidence, warnings=warnings)
 
 
 class EpubExtractor(EbookExtractor):
@@ -67,18 +88,11 @@ class EpubExtractor(EbookExtractor):
         dc = book.metadata.get(_DC_NS, {})
         opf_metas: list[tuple[str, dict]] = book.metadata.get(_OPF_NS, {}).get("meta", [])
 
-        # Build id -> title-type map from EPUB 3 refinements
         id_to_title_type: dict[str, str] = {}
-        for value, attrs in opf_metas:
-            if (
-                attrs.get("property") == "title-type"
-                and attrs.get("refines", "").startswith("#")
-            ):
-                id_to_title_type[attrs["refines"][1:]] = (value or "").strip()
-
-        # Build id -> role map from EPUB 3 refinements
         id_to_role: dict[str, str] = {}
         for value, attrs in opf_metas:
+            if attrs.get("property") == "title-type" and attrs.get("refines", "").startswith("#"):
+                id_to_title_type[attrs["refines"][1:]] = (value or "").strip()
             if (
                 attrs.get("property") == "role"
                 and attrs.get("refines", "").startswith("#")
@@ -88,70 +102,52 @@ class EpubExtractor(EbookExtractor):
 
         title, subtitle = self._parse_titles(dc, id_to_title_type)
         authors = self._parse_authors(dc, id_to_role)
-        edition = self._parse_edition(dc, opf_metas, id_to_title_type, path)
+        edition_number, edition_text = self._parse_edition(dc, opf_metas, id_to_title_type, path)
 
         return EbookMetadata(
             title=title,
             subtitle=subtitle,
             authors=authors,
-            edition=edition,
+            edition=edition_number,
+            edition_text=edition_text,
         )
 
     def _parse_titles(
-        self,
-        dc: dict[str, list[tuple[str, dict]]],
-        id_to_title_type: dict[str, str],
+        self, dc: dict[str, list[tuple[str, dict]]], id_to_title_type: dict[str, str]
     ) -> tuple[str, str | None]:
         title_entries: list[tuple[str, dict]] = dc.get("title", [])
-
-        # EPUB 3: use refinement title-types
         if id_to_title_type:
             main_title: str | None = None
             subtitle: str | None = None
             for value, attrs in title_entries:
-                el_id = attrs.get("id", "")
-                title_type = id_to_title_type.get(el_id, "")
+                title_type = id_to_title_type.get(attrs.get("id", ""), "")
                 if title_type == "main":
                     main_title = (value or "").strip()
                 elif title_type == "subtitle":
                     subtitle = (value or "").strip()
             if main_title is not None:
                 return main_title, subtitle
-
-        # EPUB 2 fallback: first dc:title
         if title_entries:
             return (title_entries[0][0] or "").strip(), None
-
         return "", None
 
-    def _parse_authors(
-        self,
-        dc: dict[str, list[tuple[str, dict]]],
-        id_to_role: dict[str, str],
-    ) -> list[str]:
+    def _parse_authors(self, dc: dict[str, list[tuple[str, dict]]], id_to_role: dict[str, str]) -> list[str]:
         creator_entries: list[tuple[str, dict]] = dc.get("creator", [])
         if not creator_entries:
             return []
-
-        # EPUB 3: filter by role "aut" using refinements
         if id_to_role:
-            return [
-                (value or "").strip()
-                for value, attrs in creator_entries
-                if id_to_role.get(attrs.get("id", ""), "") == "aut"
-            ]
-
-        # EPUB 2: use opf:role attribute
+            return _clean_values(
+                [value or "" for value, attrs in creator_entries if id_to_role.get(attrs.get("id", ""), "") == "aut"]
+            )
         has_role_attrs = any(attrs.get("role") for _, attrs in creator_entries)
         if has_role_attrs:
-            return [
-                (value or "").strip()
-                for value, attrs in creator_entries
-                if attrs.get("role", "") == "aut"
-            ]
-
-        # No role info at all: return all creators
-        return [(value or "").strip() for value, _ in creator_entries]
+            values = [value or "" for value, attrs in creator_entries if attrs.get("role", "") == "aut"]
+        else:
+            values = [value or "" for value, _ in creator_entries]
+        authors: list[str] = []
+        for value in _clean_values(values):
+            authors.extend(split_author_string(value))
+        return authors
 
     def _parse_edition(
         self,
@@ -159,74 +155,74 @@ class EpubExtractor(EbookExtractor):
         opf_metas: list[tuple[str, dict]],
         id_to_title_type: dict[str, str],
         path: Path,
-    ) -> int | None:
-        # 1. dc:title with title-type="edition"
+    ) -> tuple[int | None, str | None]:
+        candidates: list[str] = []
         if id_to_title_type:
-            for value, attrs in dc.get("title", []):
-                el_id = attrs.get("id", "")
-                if id_to_title_type.get(el_id) == "edition":
-                    return _extract_edition_number((value or "").strip())
-
-        # 2. <meta property="schema:bookEdition">
-        for value, attrs in opf_metas:
-            if attrs.get("property") == "schema:bookEdition":
-                return _extract_edition_number((value or "").strip())
-
-        # 3. <meta name="edition" content="...">
-        for value, attrs in opf_metas:
-            if attrs.get("name") == "edition":
-                content = attrs.get("content", "").strip()
-                if content:
-                    return _extract_edition_number(content)
-
-        # 4. Filename fallback
-        return _edition_from_path(path)
+            candidates.extend(
+                (value or "").strip()
+                for value, attrs in dc.get("title", [])
+                if id_to_title_type.get(attrs.get("id", "")) == "edition"
+            )
+        candidates.extend(
+            (value or "").strip() for value, attrs in opf_metas if attrs.get("property") == "schema:bookEdition"
+        )
+        candidates.extend(attrs.get("content", "").strip() for _, attrs in opf_metas if attrs.get("name") == "edition")
+        for candidate in candidates:
+            if candidate:
+                return extract_edition_number(candidate), candidate
+        return edition_from_path(path)
 
 
 class PdfExtractor(EbookExtractor):
     def extract(self, path: Path) -> EbookMetadata:
         reader = pypdf.PdfReader(str(path))
-        xmp = reader.xmp_metadata   # XmpInformation | None
-        did = reader.metadata       # DocumentInformation | None
-
+        xmp = reader.xmp_metadata
+        did = reader.metadata
+        edition_number, edition_text = edition_from_path(path)
         return EbookMetadata(
             title=self._parse_title(xmp, did),
             subtitle=None,
             authors=self._parse_authors(xmp, did),
-            edition=_edition_from_path(path),
+            edition=edition_number,
+            edition_text=format_edition(edition_number, edition_text),
         )
 
-    def _parse_title(
-        self,
-        xmp: pypdf.xmp.XmpInformation | None,
-        did: pypdf.DocumentInformation | None,
-    ) -> str:
-        if xmp is not None:
-            dc_title = xmp.dc_title  # dict[str, str] | None
-            if dc_title:
-                if "x-default" in dc_title:
-                    return dc_title["x-default"].strip()
-                first = next(iter(dc_title.values()), None)
-                if first:
-                    return first.strip()
-        if did is not None and did.title:
+    def _parse_title(self, xmp: pypdf.xmp.XmpInformation | None, did: pypdf.DocumentInformation | None) -> str:
+        if did is not None and did.title and not _looks_like_asset_title(did.title):
             return did.title.strip()
+        if xmp is not None:
+            dc_title = xmp.dc_title
+            if dc_title:
+                values = [dc_title.get("x-default", ""), *dc_title.values()]
+                for value in values:
+                    if value and not _looks_like_asset_title(value):
+                        return value.strip()
         return ""
 
-    def _parse_authors(
-        self,
-        xmp: pypdf.xmp.XmpInformation | None,
-        did: pypdf.DocumentInformation | None,
-    ) -> list[str]:
-        if xmp is not None:
-            dc_creator = xmp.dc_creator  # list[str] | None
-            if dc_creator:
-                return [a.strip() for a in dc_creator if a.strip()]
+    def _parse_authors(self, xmp: pypdf.xmp.XmpInformation | None, did: pypdf.DocumentInformation | None) -> list[str]:
         if did is not None and did.author:
             raw = did.author.strip()
-            if raw:
-                return _split_author_string(raw)
+            if raw and not _looks_like_asset_title(raw):
+                return split_author_string(raw)
+        if xmp is not None:
+            dc_creator = xmp.dc_creator
+            if dc_creator:
+                return [
+                    author.strip() for author in dc_creator if author.strip() and not _looks_like_asset_title(author)
+                ]
         return []
+
+
+class FilenameExtractor(EbookExtractor):
+    def extract(self, path: Path) -> EbookMetadata:
+        title, authors, edition_text, _ = parse_filename_metadata(path)
+        return EbookMetadata(
+            title=title,
+            subtitle=None,
+            authors=authors,
+            edition=extract_edition_number(edition_text) if edition_text else None,
+            edition_text=edition_text,
+        )
 
 
 def get_extractor(path: Path) -> EbookExtractor:
@@ -235,6 +231,13 @@ def get_extractor(path: Path) -> EbookExtractor:
         return EpubExtractor()
     if suffix == ".pdf":
         return PdfExtractor()
-    raise ValueError(
-        f"Unsupported format '{path.suffix}'. Supported formats: .epub, .pdf."
-    )
+    raise ValueError(f"Unsupported format '{path.suffix}'. Supported formats: .epub, .pdf.")
+
+
+def extract_result(path: Path) -> ExtractionResult:
+    try:
+        return get_extractor(path).extract_result(path)
+    except Exception as error:
+        result = FilenameExtractor().extract_result(path)
+        result.warnings.append(f"Embedded metadata extraction failed: {error}")
+        return result
