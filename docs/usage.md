@@ -1,110 +1,61 @@
-# Current Usage
+# Usage
 
-## Setup
-
-Use `uv` from the repository root. The project dependencies are declared in `pyproject.toml`.
+## Direct workflow
 
 ```bash
-uv run ebook-utils --help
+# Default: print only high-confidence proposals; no files are changed.
+uv run ebook-utils organize path/to/downloads --output-dir path/to/library
+
+# Inspect all actionable proposals, including books that need later attention.
+uv run ebook-utils organize path/to/downloads --output-dir path/to/library --yolo --dry-run
+
+# Apply every actionable proposal.
+uv run ebook-utils organize path/to/downloads --output-dir path/to/library --yolo
+
+# Copy while validating the result.
+uv run ebook-utils organize path/to/downloads --output-dir path/to/library --yolo --copy
 ```
 
-For tests:
+`--yolo` is explicit. It applies medium/low-confidence books only when a title and author exist; incomplete bundles are
+left untouched. The terminal output identifies attention items, while `--json` returns the same detail for an AI agent.
+
+## AI-assisted YOLO
+
+The normal integration is an external agent calling the CLI and reading JSON—there are no user-managed review files:
 
 ```bash
-uv run --extra test python -m pytest
+uv run ebook-utils organize path/to/downloads --output-dir path/to/library --yolo --dry-run --json
 ```
 
-For AI provider dependencies:
+For one-command provider assistance, install an optional adapter and supply its normal environment variable:
 
 ```bash
 uv sync --extra ai-openai
-uv sync --extra ai-claude
-uv sync --extra ai
+export OPENAI_API_KEY=...
+uv run ebook-utils organize path/to/downloads --output-dir path/to/library --yolo --ai-provider openai
 ```
 
-Set provider credentials using the normal SDK environment variables, for example `OPENAI_API_KEY` or
-`ANTHROPIC_API_KEY`. Optional model overrides can be passed on the CLI.
+Use `--ai-provider claude` after `uv sync --extra ai-claude` and setting `ANTHROPIC_API_KEY`. AI-supplied values are
+included in the final attention list and capped at medium confidence.
 
-## Inspect One File
+## Inspection
 
 ```bash
 uv run ebook-utils info path/to/book.epub
-uv run ebook-utils info path/to/book.epub --json
-```
-
-This extracts embedded metadata and filename evidence. JSON output includes confidence, evidence source, warnings, and
-parsed metadata.
-
-## Scan A Raw Download Directory
-
-```bash
 uv run ebook-utils scan path/to/downloads
 uv run ebook-utils scan path/to/downloads --json
+uv run ebook-utils plan path/to/downloads --output-dir path/to/library --yolo
 ```
 
-This discovers `.epub` and `.pdf` files, extracts evidence, groups likely same-book files, and prints bundle confidence.
+`scan` and `plan` expose evidence, selected metadata, field confidence, reasons, proposed moves, skipped books, and
+collisions.
 
-## Preview Rename And Grouping Actions
-
-```bash
-uv run ebook-utils plan path/to/downloads
-uv run ebook-utils plan path/to/downloads --output-dir path/to/library
-uv run ebook-utils plan path/to/downloads --json
-```
-
-`plan` does not mutate files. It shows which files would be moved into canonical book directories. Low-confidence
-bundles are listed for review and are not included in planned moves.
-
-## Apply High-Confidence Moves
-
-```bash
-uv run ebook-utils apply path/to/downloads --output-dir path/to/library
-```
-
-By default this moves files. To copy instead:
-
-```bash
-uv run ebook-utils apply path/to/downloads --output-dir path/to/library --copy
-```
-
-Only high-confidence bundles are moved or copied. Low-confidence bundles remain untouched. Existing target files cause
-the command to fail instead of overwriting.
-
-## Resolve Low-Confidence Bundles With AI Suggestions
-
-```bash
-uv run ebook-utils resolve-low-confidence path/to/downloads --ai-provider openai
-uv run ebook-utils resolve-low-confidence path/to/downloads --ai-provider claude
-uv run ebook-utils resolve-low-confidence path/to/downloads --ai-provider openai --model gpt-4.1-mini --json
-```
-
-AI output is advisory. It returns suggested title, authors, edition text, confidence, and reasoning. The current
-pipeline does not automatically convert AI suggestions into file mutations.
-
-## Prepare Kindle Manifest
-
-```bash
-uv run ebook-utils prepare-kindle path/to/downloads --manifest kindle-manifest.csv
-```
-
-This writes a CSV manifest for high-confidence planned files. It is intended for Send-to-Kindle preparation and review.
-It does not upload files to Kindle.
-
-## Notion Command
-
-```bash
-uv run ebook-utils sync-notion
-```
-
-This command currently exits with a placeholder message. Notion sync is not implemented yet.
-
-## Canonical Naming
-
-The current target format is:
+## Canonical name
 
 ```text
 Title - Author 1, Author 2, Author 3 - Optional edition
 ```
 
-Only up to three authors are included in canonical names. File and directory names are sanitized for common path-invalid
-characters.
+Subtitles are deliberately omitted. First edition is omitted. Numeric editions are normalized to `2nd edition`,
+`3rd edition`, and so on; recognized special editions include `Anniversary edition`, `Revised edition`, and
+`Special edition`.

@@ -11,12 +11,14 @@ class EbookMetadata:
     authors: list[str]
     edition: int | None = None
     edition_text: str | None = None
+    isbns: list[str] = field(default_factory=list)
 
 
 class MetadataField(str, Enum):
     TITLE = "title"
     AUTHORS = "authors"
     EDITION = "edition"
+    ISBN = "isbn"
 
 
 class Confidence(str, Enum):
@@ -49,7 +51,10 @@ class CanonicalMetadata:
     title: str
     authors: list[str]
     edition_text: str | None
+    isbns: list[str]
     confidence: Confidence
+    field_confidence: dict[MetadataField, Confidence] = field(default_factory=dict)
+    field_reasons: dict[MetadataField, list[str]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -73,6 +78,8 @@ class PipelinePlan:
     bundles: list[EbookBundle]
     moves: list[PlannedFileMove]
     review_bundles: list[EbookBundle]
+    skipped_bundles: list[EbookBundle] = field(default_factory=list)
+    collisions: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

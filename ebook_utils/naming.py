@@ -24,6 +24,17 @@ _WORD_TO_NUM = {
     "ninth": 9,
     "tenth": 10,
 }
+_NON_AUTHOR_PREFIXES = (
+    "red.",
+    "redaktor",
+    "editor",
+    "ed.",
+    "edited by",
+    "translated by",
+    "translator",
+    "tłum.",
+)
+
 
 
 def normalize_key(value: str) -> str:
@@ -31,6 +42,27 @@ def normalize_key(value: str) -> str:
     normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
     normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
     return " ".join(normalized.split())
+
+
+_ISBN_CANDIDATE = re.compile(r"(?<![0-9Xx])(?:97[89][ -]?)?(?:[0-9][ -]?){9}[0-9Xx](?![0-9Xx])")
+
+
+def normalize_isbn(value: str) -> str:
+    return re.sub(r"[^0-9Xx]", "", value).upper()
+
+
+def is_valid_isbn(value: str) -> bool:
+    isbn = normalize_isbn(value)
+    if len(isbn) == 10 and re.fullmatch(r"[0-9]{9}[0-9X]", isbn):
+        return sum((10 - index) * (10 if char == "X" else int(char)) for index, char in enumerate(isbn)) % 11 == 0
+    if len(isbn) == 13 and isbn.isdigit():
+        return sum(int(char) * (1 if index % 2 == 0 else 3) for index, char in enumerate(isbn)) % 10 == 0
+    return False
+
+
+def extract_isbns(text: str) -> list[str]:
+    values = {normalize_isbn(match.group(0)) for match in _ISBN_CANDIDATE.finditer(text)}
+    return sorted(value for value in values if is_valid_isbn(value))
 
 
 def split_author_string(raw: str) -> list[str]:
@@ -41,11 +73,34 @@ def split_author_string(raw: str) -> list[str]:
         parts = raw.split(";")
     elif re.search(r"\s+(?:and|&)\s+", raw, re.IGNORECASE):
         parts = re.split(r"\s+(?:and|&)\s+", raw, flags=re.IGNORECASE)
-    elif re.search(r",\s+(?:[A-ZŁŚŻŹĆŃÓĘ]|[A-Z][a-z])", raw):
-        parts = raw.split(",")
+    elif "," in raw:
+        comma_parts = [part.strip() for part in raw.split(",") if part.strip()]
+        # Bibliographic metadata often represents a single person as "Last, First".
+        # Only reverse the unambiguous two-part form; comma-separated full names are
+        # kept as multiple authors.
+        if len(comma_parts) == 2 and len(comma_parts[0].split()) == 1:
+            return [normalize_author_name(f"{comma_parts[1]} {comma_parts[0]}")]
+        parts = comma_parts
     else:
-        return [raw]
-    return [part.strip() for part in parts if part.strip()]
+        return [normalize_author_name(raw)]
+    return [normalize_author_name(part) for part in parts if part.strip()]
+
+
+def is_non_author_contributor(value: str) -> bool:
+    return value.strip().casefold().startswith(_NON_AUTHOR_PREFIXES)
+
+
+def normalize_author_name(value: str) -> str:
+    """Return a display name in First Name Last Name order where unambiguous."""
+    value = re.sub(r"\s+", " ", value).strip(" ,;")
+    if not value:
+        return ""
+    # This is intentionally narrow: only a single-word family name followed by a
+    # comma is reliably distinguishable from a list of authors.
+    match = re.fullmatch(r"([^,\s]+),\s+(.+)", value)
+    if match:
+        return f"{match.group(2).strip()} {match.group(1).strip()}"
+    return value
 
 
 def extract_edition_number(text: str) -> int | None:
@@ -59,7 +114,7 @@ def extract_edition_number(text: str) -> int | None:
 
 def extract_edition_text(text: str) -> str | None:
     match = re.search(
-        r"\b((?:(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)|(?:\d+)(?:st|nd|rd|th)?)\s+edition|revised edition)\b",
+        r"\b((?:(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)|(?:\d+)(?:st|nd|rd|th)?)\s+edition|(?:revised|updated|expanded|anniversary|special|deluxe|collector(?:'s)?)\s+edition)\b",
         text,
         flags=re.IGNORECASE,
     )
@@ -90,7 +145,7 @@ def parse_filename_metadata(path: Path) -> tuple[str, list[str], str | None, Con
         parts = [part.strip() for part in without_edition.split(" - ") if part.strip()]
         title = parts[0] if parts else without_edition
         authors = split_author_string(parts[1]) if len(parts) > 1 else []
-        confidence = Confidence.HIGH if title and authors else Confidence.MEDIUM
+        confidence = Confidence.MEDIUM if title and authors else Confidence.LOW
         return title, authors, edition_text, confidence
 
     slug_parts = [part for part in re.split(r"[-\s]+", without_edition) if part]
@@ -108,10 +163,19 @@ def ordinal_suffix(number: int) -> str:
 
 
 def format_edition(edition_number: int | None, edition_text: str | None) -> str | None:
+    number = edition_number or (extract_edition_number(edition_text) if edition_text else None)
+    if number == 1:
+        return None
+    if number and number > 1:
+        return f"{number}{ordinal_suffix(number)} edition"
     if edition_text:
-        return edition_text
-    if edition_number and edition_number > 1:
-        return f"{edition_number}{ordinal_suffix(edition_number)} edition"
+        text = re.sub(r"\s+", " ", edition_text).strip()
+        if re.fullmatch(
+            r"(?:revised|updated|expanded|anniversary|special|deluxe|collector(?:'s)?)\s+edition",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            return text[:1].upper() + text[1:]
     return None
 
 

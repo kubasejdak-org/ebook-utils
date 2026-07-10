@@ -1,92 +1,97 @@
 # ebook-utils
 
-A CLI tool for organizing downloaded ebooks (EPUB, PDF) into a clean, structured library. It extracts metadata from
-embedded file headers and filenames, groups different formats of the same book together, assigns confidence scores, and
-renames or moves files into a canonical directory structure — automatically for high-confidence matches, with a manual
-review gate for uncertain ones. An optional AI step (OpenAI or Claude) can suggest metadata for the uncertain cases.
+`ebook-utils` turns a loose EPUB/PDF download folder into a consistent ebook library:
 
-Typical use case: a raw Humble Bundle download folder full of files like `python-crash-course_ebookpoint.epub` that you
-want to turn into `Python Crash Course - Eric Matthes - 2nd edition`.
+```text
+Title - First Author, Second Author, Third Author [- Nth edition]/
+  Title - First Author, Second Author, Third Author [- Nth edition].epub
+  Title - First Author, Second Author, Third Author [- Nth edition].pdf
+```
 
----
+It is built for raw Humble Bundle-style downloads, where filenames and embedded metadata are uneven. It does not include
+subtitles in the canonical title. First editions are omitted; defined special editions such as `Anniversary edition` are
+retained.
 
-## Install
+## Use it
 
 ```bash
-# Core (no AI)
 uv sync
 
-# With AI support
-uv sync --extra ai-openai    # OpenAI only
-uv sync --extra ai-claude    # Claude only
-uv sync --extra ai           # Both providers
+# Always safe: default is a dry run of high-confidence moves.
+ebook-utils organize /downloads --output-dir /library
+
+# Preview every actionable proposal, including uncertain books.
+ebook-utils organize /downloads --output-dir /library --yolo --dry-run
+
+# Organize every actionable book now. Uncertain books remain in the attention list.
+ebook-utils organize /downloads --output-dir /library --yolo
+
+# Test without removing the originals.
+ebook-utils organize /downloads --output-dir /library --yolo --copy
 ```
 
-## Quick start
+A book is actionable only when the tool has both a title and at least one author. `--yolo` never invents
+`Unknown Author`; it leaves incomplete books in place and reports them.
+
+## Confidence and attention
+
+Every scan, plan, and `organize --json` result includes confidence for `title`, `authors`, `edition`, and `isbn`, plus
+the evidence and reasons behind it.
+
+- `high`: corroborated by independent usable evidence, such as matching EPUB/PDF metadata or reliable metadata plus a
+  canonical filename.
+- `medium`: plausible but supported by only one usable source. This includes a valid ISBN discovered in one file and a
+  standalone EPUB metadata record.
+- `low`: missing, filename-only, or conflicting evidence.
+
+The overall confidence is based on title and author confidence. Edition and ISBN are reported independently because
+their absence should not prevent a book with a known title and author from being organized.
+
+`organize --yolo` moves actionable medium/low-confidence books too, but prints them under **Attention after
+organization** so the manual review happens in the already structured library. Existing targets and duplicate planned
+targets are preflighted before any move; a collision stops the whole apply pass.
+
+## AI use
+
+The primary interface is agent-friendly rather than tied to one AI SDK:
 
 ```bash
-# Preview what would happen — no files touched
-ebook-utils plan /path/to/downloads
-
-# Apply: move high-confidence files into organized folders
-ebook-utils apply /path/to/downloads --output-dir /path/to/library
-
-# Use --copy to keep originals while testing
-ebook-utils apply /path/to/downloads --output-dir /path/to/library --copy
-
-# Get AI suggestions for anything the tool wasn't sure about
-export ANTHROPIC_API_KEY=...
-ebook-utils resolve-low-confidence /path/to/downloads --ai-provider claude
+ebook-utils organize /downloads --output-dir /library --yolo --dry-run --json
 ```
 
----
+Codex, Claude, or another agent can inspect this structured output and choose whether to run the same command with
+`--yolo`. No review files are required.
+
+For a self-contained autonomous run, the existing optional provider adapters can enrich uncertain bundles before YOLO
+mode:
+
+```bash
+uv sync --extra ai-openai
+ebook-utils organize /downloads --output-dir /library --yolo --ai-provider openai
+```
+
+OpenAI and Claude suggestions are intentionally capped at medium confidence and remain in the final attention list. They
+never silently become high-confidence evidence.
 
 ## Commands
 
-| Command                        | What it does                                                      |
-| ------------------------------ | ----------------------------------------------------------------- |
-| `info <file>`                  | Show extracted metadata and confidence for a single file          |
-| `scan <dir>`                   | List all discovered bundles with confidence scores                |
-| `plan <dir>`                   | Preview the full rename/move plan without touching files          |
-| `apply <dir>`                  | Execute the plan (move or `--copy`); skips low-confidence bundles |
-| `resolve-low-confidence <dir>` | Query AI for metadata suggestions on uncertain bundles            |
-| `prepare-kindle <dir>`         | Generate a CSV manifest for Send-to-Kindle                        |
-| `sync-notion`                  | _(not yet implemented)_ Sync metadata to a Notion database        |
+| Command                      | Purpose                                                                           |
+| ---------------------------- | --------------------------------------------------------------------------------- |
+| `info FILE`                  | Show raw metadata/evidence for one EPUB or PDF.                                   |
+| `scan DIR`                   | List bundles with field-level confidence.                                         |
+| `plan DIR`                   | Dry-run high-confidence moves; add `--yolo` to preview all actionable candidates. |
+| `organize DIR`               | Direct workflow: dry-run by default; `--yolo` applies.                            |
+| `apply DIR`                  | Backward-compatible apply command; use `--yolo` for uncertain actionable books.   |
+| `resolve-low-confidence DIR` | Print optional OpenAI/Claude suggestions without mutation.                        |
+| `prepare-kindle DIR`         | Create a high-confidence CSV manifest.                                            |
 
-All commands accept `--json` for machine-readable output.
+All implemented inspection/planning commands accept `--json` for agents and scripts.
 
----
+## Supported metadata
 
-## Canonical naming format
+- EPUB: OPF/DC title, author-role filtering, edition metadata, and valid ISBNs.
+- PDF: document/XMP metadata, first five pages for valid ISBNs, and conservative filename fallback.
+- Filename fallback: useful, but never high-confidence on its own.
 
-```
-Title - Author1, Author2 - Optional edition
-```
-
-Files are placed inside a folder with this name, e.g.:
-
-```
-Python Crash Course - Eric Matthes - 2nd edition/
-  Python Crash Course - Eric Matthes - 2nd edition.epub
-  Python Crash Course - Eric Matthes - 2nd edition.pdf
-```
-
----
-
-## Environment variables
-
-| Variable                   | Purpose                                                   |
-| -------------------------- | --------------------------------------------------------- |
-| `OPENAI_API_KEY`           | Required for `--ai-provider openai`                       |
-| `ANTHROPIC_API_KEY`        | Required for `--ai-provider claude`                       |
-| `EBOOK_UTILS_OPENAI_MODEL` | Override default OpenAI model (`gpt-4.1-mini`)            |
-| `EBOOK_UTILS_CLAUDE_MODEL` | Override default Claude model (`claude-3-5-haiku-latest`) |
-
----
-
-## Documentation
-
-- [`docs/overview.md`](docs/overview.md) — Architecture and key design decisions
-- [`docs/usage.md`](docs/usage.md) — Full CLI reference with examples
-- [`docs/requirements.md`](docs/requirements.md) — Functional requirements and implementation status
-- [`docs/roadmap.md`](docs/roadmap.md) — Known limitations and future work
+The tool supports EPUB and PDF. MOBI, Notion sync, and Kindle upload are intentionally outside the initial organization
+workflow.

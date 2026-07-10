@@ -1,59 +1,19 @@
-# Ebook Utils Conversation And Implementation Summary
+# Architecture
 
-## Goal
+The core is a deterministic local pipeline, independent of the CLI and optional AI SDKs:
 
-`ebook-utils` is intended to manage raw ebook downloads, especially packs from Humble Bundle or similar vendors. The
-target workflow is:
-
-1. Scan loose ebook files such as EPUB and PDF.
-2. Extract title, authors, and edition from embedded metadata and filenames.
-3. Group different formats of the same book into one directory.
-4. Rename files into the canonical format: `Title - Authors - Optional edition`.
-5. Use AI only for low-confidence cases.
-6. Later enrich metadata from Amazon and update Notion.
-7. Later prepare or automate Kindle upload workflows.
-
-The original concern was that manual review of every book is too slow. The implemented direction is therefore tool-first
-automation with conservative review gates.
-
-## Main Decisions
-
-- Raw downloaded files are the input, not manually verified `To Notion` folders.
-- High-confidence books may be renamed and grouped automatically.
-- Low-confidence cases stop before file mutation and are reported for review.
-- EPUB metadata is treated as stronger evidence than PDF metadata.
-- PDF metadata is treated carefully because PDFs can contain embedded asset metadata that looks like book metadata.
-- Filename parsing is important because vendor downloads often contain useful title/author hints.
-- AI postprocessing is advisory by default. It can suggest corrected metadata for low-confidence bundles, but it does
-  not directly authorize mutation.
-- OpenAI and Claude support should be pluggable through one provider interface.
-- The code should remain ready for a future terminal UI, so pipeline logic lives in service modules rather than Typer
-  command handlers.
-
-## What Was Implemented
-
-- Structured metadata and evidence models with confidence and source tracking.
-- EPUB and PDF extraction returning `ExtractionResult` objects.
-- Filename fallback extraction when embedded metadata is missing or parsing fails.
-- Canonical naming helpers for title, authors, and edition.
-- Bundle discovery for supported ebook files.
-- Rename/grouping plan generation.
-- High-confidence file move/copy application.
-- Kindle preparation manifest generation.
-- Optional AI resolver interface with OpenAI and Claude adapters.
-- CLI commands for scan, plan, apply, AI review, and Kindle manifest generation.
-- JSON output for agent and future UI integration.
-- Focused tests for naming, planning, and AI response parsing.
-
-## Current Verification
-
-The following checks passed after implementation:
-
-```bash
-uv run --extra test python -m pytest
-uv run python -m compileall ebook_utils
-uv run ebook-utils plan .
+```text
+EPUB/PDF + filename → extraction evidence → grouping → field confidence → plan → dry-run or YOLO apply
 ```
 
-The local sample run found four bundles: two EPUBs were high confidence and two sample PDFs were left as low-confidence
-review cases.
+`extractor.py` obtains embedded data and filename fallback. `pipeline.py` groups variants, selects canonical metadata,
+calculates field-level confidence, creates safe moves, preflights collisions, and rolls back an unexpected partial
+apply. `cli.py` exposes that logic with Typer.
+
+Confidence is evidence-aware rather than a property of the file type alone. A valid ISBN is checksum-validated locally.
+An EPUB metadata value is useful but normally medium until corroborated; a filename alone is never high. Conflicts among
+usable sources are low confidence and stay visible in the attention list.
+
+The user-facing flow avoids review artifacts. `organize` is a dry-run by default and `--yolo` executes all actionable
+proposals. An external AI agent can consume `--json`; optional OpenAI/Claude adapters are available for autonomous
+enrichment, but their suggestions are never silently promoted to high confidence.

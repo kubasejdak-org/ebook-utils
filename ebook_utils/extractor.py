@@ -8,8 +8,11 @@ from .models import Confidence, EbookMetadata, ExtractionResult, MetadataEvidenc
 from .naming import (
     edition_from_path,
     extract_edition_number,
+    extract_isbns,
     format_edition,
     parse_filename_metadata,
+    is_non_author_contributor,
+    normalize_author_name,
     split_author_string,
 )
 
@@ -47,18 +50,21 @@ class EbookExtractor(ABC):
         evidence: list[MetadataEvidence] = []
         warnings: list[str] = []
         source = path.suffix.lower().lstrip(".") or "unknown"
+        embedded_confidence = Confidence.HIGH if source == "epub" else Confidence.MEDIUM
 
         if metadata.title:
-            evidence.append(MetadataEvidence(MetadataField.TITLE, metadata.title, source, path, Confidence.HIGH))
+            evidence.append(MetadataEvidence(MetadataField.TITLE, metadata.title, source, path, embedded_confidence))
         if metadata.authors:
-            evidence.append(MetadataEvidence(MetadataField.AUTHORS, metadata.authors, source, path, Confidence.HIGH))
+            evidence.append(MetadataEvidence(MetadataField.AUTHORS, metadata.authors, source, path, embedded_confidence))
         if metadata.edition_text:
             evidence.append(
-                MetadataEvidence(MetadataField.EDITION, metadata.edition_text, source, path, Confidence.MEDIUM)
+                MetadataEvidence(MetadataField.EDITION, metadata.edition_text, source, path, embedded_confidence)
             )
         elif metadata.edition:
-            evidence.append(MetadataEvidence(MetadataField.EDITION, metadata.edition, source, path, Confidence.MEDIUM))
+            evidence.append(MetadataEvidence(MetadataField.EDITION, metadata.edition, source, path, embedded_confidence))
 
+        if metadata.isbns:
+            evidence.append(MetadataEvidence(MetadataField.ISBN, metadata.isbns, source, path, embedded_confidence))
         filename_title, filename_authors, filename_edition, filename_confidence = parse_filename_metadata(path)
         if filename_title:
             evidence.append(
@@ -103,6 +109,7 @@ class EpubExtractor(EbookExtractor):
         title, subtitle = self._parse_titles(dc, id_to_title_type)
         authors = self._parse_authors(dc, id_to_role)
         edition_number, edition_text = self._parse_edition(dc, opf_metas, id_to_title_type, path)
+        isbns = extract_isbns(" ".join(value or "" for value, _ in dc.get("identifier", [])))
 
         return EbookMetadata(
             title=title,
@@ -110,6 +117,7 @@ class EpubExtractor(EbookExtractor):
             authors=authors,
             edition=edition_number,
             edition_text=edition_text,
+            isbns=isbns,
         )
 
     def _parse_titles(
@@ -136,17 +144,17 @@ class EpubExtractor(EbookExtractor):
         if not creator_entries:
             return []
         if id_to_role:
-            return _clean_values(
-                [value or "" for value, attrs in creator_entries if id_to_role.get(attrs.get("id", ""), "") == "aut"]
-            )
-        has_role_attrs = any(attrs.get("role") for _, attrs in creator_entries)
-        if has_role_attrs:
+            values = [value or "" for value, attrs in creator_entries if id_to_role.get(attrs.get("id", "")) == "aut"]
+        elif any(attrs.get("role") for _, attrs in creator_entries):
             values = [value or "" for value, attrs in creator_entries if attrs.get("role", "") == "aut"]
         else:
             values = [value or "" for value, _ in creator_entries]
+
         authors: list[str] = []
         for value in _clean_values(values):
-            authors.extend(split_author_string(value))
+            for author in split_author_string(value):
+                if author and not is_non_author_contributor(author):
+                    authors.append(normalize_author_name(author))
         return authors
 
     def _parse_edition(
@@ -185,6 +193,7 @@ class PdfExtractor(EbookExtractor):
             authors=self._parse_authors(xmp, did),
             edition=edition_number,
             edition_text=format_edition(edition_number, edition_text),
+            isbns=self._parse_isbns(reader, did),
         )
 
     def _parse_title(self, xmp: pypdf.xmp.XmpInformation | None, did: pypdf.DocumentInformation | None) -> str:
@@ -200,20 +209,49 @@ class PdfExtractor(EbookExtractor):
         return ""
 
     def _parse_authors(self, xmp: pypdf.xmp.XmpInformation | None, did: pypdf.DocumentInformation | None) -> list[str]:
-        if did is not None and did.author:
-            raw = did.author.strip()
-            if raw and not _looks_like_asset_title(raw):
-                return split_author_string(raw)
-        if xmp is not None:
-            dc_creator = xmp.dc_creator
-            if dc_creator:
-                return [
-                    author.strip() for author in dc_creator if author.strip() and not _looks_like_asset_title(author)
-                ]
-        return []
+        values: list[str] = []
+        if did is not None and did.author and not _looks_like_asset_title(did.author):
+            values.append(did.author)
+        elif xmp is not None and xmp.dc_creator:
+            values.extend(author for author in xmp.dc_creator if author and not _looks_like_asset_title(author))
+        authors: list[str] = []
+        for value in values:
+            for author in split_author_string(value):
+                if author and not is_non_author_contributor(author):
+                    authors.append(normalize_author_name(author))
+        return authors
+
+    def _parse_isbns(self, reader: pypdf.PdfReader, did: pypdf.DocumentInformation | None) -> list[str]:
+        values: list[str] = []
+        if did is not None:
+            values.extend(str(value) for value in did.values() if value)
+        for page in reader.pages[:5]:
+            try:
+                values.append(page.extract_text() or "")
+            except Exception:
+                continue
+        return extract_isbns("\n".join(values))
 
 
 class FilenameExtractor(EbookExtractor):
+    def extract_result(self, path: Path) -> ExtractionResult:
+        metadata = self.extract(path)
+        title, authors, edition_text, confidence = parse_filename_metadata(path)
+        evidence: list[MetadataEvidence] = []
+        if title:
+            evidence.append(MetadataEvidence(MetadataField.TITLE, title, "filename", path, confidence))
+        if authors:
+            evidence.append(MetadataEvidence(MetadataField.AUTHORS, authors, "filename", path, confidence))
+        if edition_text:
+            evidence.append(MetadataEvidence(MetadataField.EDITION, edition_text, "filename", path, confidence))
+        return ExtractionResult(
+            path=path,
+            format=path.suffix.lower().lstrip(".") or "unknown",
+            metadata=metadata,
+            evidence=evidence,
+            warnings=["Only filename evidence is available."],
+        )
+
     def extract(self, path: Path) -> EbookMetadata:
         title, authors, edition_text, _ = parse_filename_metadata(path)
         return EbookMetadata(
