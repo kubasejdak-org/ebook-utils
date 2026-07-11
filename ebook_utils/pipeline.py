@@ -410,33 +410,6 @@ def apply_plan(plan: PipelinePlan, *, copy: bool = False) -> list[PlannedFileMov
     return applied
 
 
-def prepare_kindle_manifest(plan: PipelinePlan, output_path: Path) -> Path:
-    rows = ["source,target,title,authors,edition,confidence"]
-    bundle_by_file = {file_path: bundle for bundle in plan.bundles for file_path in bundle.files}
-    for move in plan.moves:
-        bundle = bundle_by_file[move.source]
-        rows.append(
-            ",".join(
-                [
-                    _csv(move.source),
-                    _csv(move.target),
-                    _csv(bundle.metadata.title),
-                    _csv("; ".join(bundle.metadata.authors)),
-                    _csv(bundle.metadata.edition_text or ""),
-                    _csv(bundle.metadata.confidence.value),
-                ]
-            )
-        )
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text("\n".join(rows) + "\n")
-    return output_path
-
-
-def _csv(value: object) -> str:
-    text = str(value).replace('"', '""')
-    return f'"{text}"'
-
-
 def to_jsonable(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)

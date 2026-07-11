@@ -111,7 +111,7 @@ Notable rules:
 All commands are Typer subcommands of `ebook-utils` (`ebook_utils/cli.py:18`). A shared error helper, `_fail`
 (`cli.py:287`), prints `Error: {message}` to stderr and exits **1** on any
 `FileNotFoundError`/`FileExistsError`/`AiResolverError`/`ValueError` — this is the exit code for essentially every
-failure except `sync-notion` (see below). Every inspection/planning command supports `--json` for machine consumption.
+failure. Every inspection/planning command supports `--json` for machine consumption.
 
 ### `info FILE`
 
@@ -214,28 +214,9 @@ ebook-utils resolve-low-confidence /downloads --ai-provider claude --json
 - `--json`: list of `{"bundle": ..., "suggestion": ...}` objects — the raw, uncapped `AiSuggestion`, not merged/capped
   the way `organize --ai-provider` merges it into a plan.
 
-### `prepare-kindle DIR [--manifest kindle-manifest.csv] [--output-dir DIR]`
-
-Write a CSV manifest of the **HIGH-confidence-only** plan. Never moves ebook files.
-
-```bash
-ebook-utils prepare-kindle /downloads --manifest manifest.csv --output-dir /library
-```
-
-- `include_review` is not passed (defaults to `False`), so only HIGH-confidence moves are listed — there is no `--yolo`
-  for this command.
-- Output: a CSV with header `source,target,title,authors,edition,confidence`, one row per planned move
-  (`prepare_kindle_manifest`, `pipeline.py:413`).
-- Human output: `Wrote Kindle manifest: {path}` plus the attention section.
-
-### `sync-notion`
-
-Placeholder. Always prints `Notion sync is not implemented yet.` to stderr and exits **2** — notably not the `1` used
-everywhere else, signaling "unimplemented" rather than a runtime failure.
-
 ### The "attention" section
 
-Shared by `organize` (yolo-apply path) and `prepare-kindle` (`_print_attention`, `cli.py:263`):
+Used by `organize` (yolo-apply path) (`_print_attention`, `cli.py:263`):
 
 - **`Attention after organization: N book(s)`** — every bundle whose overall confidence isn't `HIGH`, whether or not it
   was actually moved. This is where manual review happens, inside the already-restructured library.
@@ -257,7 +238,6 @@ Shared by `organize` (yolo-apply path) and `prepare-kindle` (`_print_attention`,
 | Let an agent (Claude/Codex/etc.) decide programmatically what to do next        | `organize DIR --output-dir OUT --yolo --dry-run --json`     |
 | Get AI opinions on the borderline books without committing to anything          | `resolve-low-confidence DIR`                                |
 | Let AI suggestions feed directly into the plan (still capped at MEDIUM)         | `organize DIR --output-dir OUT --yolo --ai-provider openai` |
-| Get a CSV manifest of high-confidence books only, without reorganizing anything | `prepare-kindle DIR --manifest FILE.csv`                    |
 
 ## 5. AI provider integration (`ebook_utils/ai.py`)
 
@@ -312,10 +292,9 @@ Shared by `organize` (yolo-apply path) and `prepare-kindle` (`_print_attention`,
 ## 8. Known gaps / testing notes
 
 - `tests/test_cli.py` currently has only **2 tests**, both covering `organize` (dry-run-by-default behavior,
-  `--yolo --copy`, `--yolo` real move). There is currently no CLI-level test coverage for `info`, `scan`, `plan`,
-  `resolve-low-confidence`, `prepare-kindle`, or `sync-notion` — worth keeping in mind if you're relying on
-  those commands for something critical.
-- MOBI, Notion sync, and Kindle upload are intentionally out of scope for the organization workflow (per `README.md`) —
-  `sync-notion` is a stub, and there's no MOBI extractor.
+  `--yolo --copy`, `--yolo` real move). There is currently no CLI-level test coverage for `info`, `scan`, `plan`, or
+  `resolve-low-confidence` — worth keeping in mind if you're relying on those commands for something critical.
+- MOBI, Notion sync, and Kindle delivery remain intentionally out of scope for the organization workflow (per
+  `README.md`) — there's no MOBI extractor and no Notion/Kindle integration code.
 - `tests/assets/` contains real-world sample fixtures (two PDFs, two Helion/ebookpoint-style Polish EPUBs) used by the
   test suite — useful reference points for understanding the filename/author-filtering edge cases described in §6.

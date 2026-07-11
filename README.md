@@ -82,7 +82,6 @@ never silently become high-confidence evidence.
 | `plan DIR`                   | Dry-run high-confidence moves; add `--yolo` to preview all actionable candidates. |
 | `organize DIR`               | Direct workflow: dry-run by default; `--yolo` applies.                            |
 | `resolve-low-confidence DIR` | Print optional OpenAI/Claude suggestions without mutation.                        |
-| `prepare-kindle DIR`         | Create a high-confidence CSV manifest.                                            |
 
 All implemented inspection/planning commands accept `--json` for agents and scripts.
 

@@ -10,7 +10,6 @@ from .pipeline import (
     apply_plan,
     build_plan,
     dumps_json,
-    prepare_kindle_manifest,
     resolve_bundles_with_ai,
     to_jsonable,
 )
@@ -170,33 +169,6 @@ def resolve_low_confidence(
         typer.echo(f"Confidence: {suggestion.get('confidence')}")
         typer.echo(f"Reasoning: {suggestion.get('reasoning')}")
         typer.echo()
-
-
-@app.command("prepare-kindle")
-def prepare_kindle(
-    root: Annotated[Path, typer.Argument(...)],
-    manifest: Annotated[Path, typer.Option("--manifest", help="CSV manifest path.")] = Path("kindle-manifest.csv"),
-    output_dir: Annotated[Path | None, typer.Option("--output-dir", help="Destination library directory.")] = None,
-    json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON.")] = False,
-) -> None:
-    """Create a Send-to-Kindle manifest for high-confidence planned files."""
-    try:
-        pipeline_plan = build_plan(root, output_dir=output_dir)
-        output_path = prepare_kindle_manifest(pipeline_plan, manifest)
-    except FileNotFoundError as error:
-        _fail(error)
-    if json_output:
-        typer.echo(dumps_json({"manifest": output_path, "plan": pipeline_plan}))
-        return
-    typer.echo(f"Wrote Kindle manifest: {output_path}")
-    _print_attention(pipeline_plan)
-
-
-@app.command("sync-notion")
-def sync_notion() -> None:
-    """Placeholder for a future library-index integration."""
-    typer.echo("Notion sync is not implemented yet.", err=True)
-    raise typer.Exit(2)
 
 
 def _organization_plan(
