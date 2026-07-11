@@ -141,31 +141,6 @@ def organize(
     _print_attention(pipeline_plan)
 
 
-@app.command("apply")
-def apply_command(
-    root: Annotated[Path, typer.Argument(...)],
-    output_dir: Annotated[Path | None, typer.Option("--output-dir", help="Destination library directory.")] = None,
-    yolo: Annotated[
-        bool,
-        typer.Option("--yolo", help="Also apply actionable medium/low-confidence proposals."),
-    ] = False,
-    copy: Annotated[bool, typer.Option("--copy", help="Copy files instead of moving them.")] = False,
-    json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON.")] = False,
-) -> None:
-    """Apply high-confidence moves; add --yolo to also apply uncertain candidates."""
-    try:
-        pipeline_plan = build_plan(root, output_dir=output_dir, include_review=yolo)
-        applied = apply_plan(pipeline_plan, copy=copy)
-    except (FileExistsError, FileNotFoundError) as error:
-        _fail(error)
-    if json_output:
-        typer.echo(dumps_json({"applied": applied, "plan": pipeline_plan}))
-        return
-    for move in applied:
-        typer.echo(f"{'Copied' if copy else 'Moved'}: {move.source} -> {move.target}")
-    _print_attention(pipeline_plan)
-
-
 @app.command("resolve-low-confidence")
 def resolve_low_confidence(
     root: Annotated[Path, typer.Argument(...)],

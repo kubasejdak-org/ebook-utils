@@ -81,7 +81,6 @@ never silently become high-confidence evidence.
 | `scan DIR`                   | List bundles with field-level confidence.                                         |
 | `plan DIR`                   | Dry-run high-confidence moves; add `--yolo` to preview all actionable candidates. |
 | `organize DIR`               | Direct workflow: dry-run by default; `--yolo` applies.                            |
-| `apply DIR`                  | Backward-compatible apply command; use `--yolo` for uncertain actionable books.   |
 | `resolve-low-confidence DIR` | Print optional OpenAI/Claude suggestions without mutation.                        |
 | `prepare-kindle DIR`         | Create a high-confidence CSV manifest.                                            |
 

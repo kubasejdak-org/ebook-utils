@@ -199,18 +199,6 @@ Expected results:
 - Exit 1 on `AiResolverError` (bad provider / missing SDK / bad AI JSON) or on an apply-time collision
   (`FileExistsError`).
 
-### `apply DIR [--output-dir DIR] [--yolo] [--copy]` — backward-compatible, always mutates
-
-```bash
-ebook-utils apply /downloads --output-dir /library
-ebook-utils apply /downloads --output-dir /library --yolo --copy
-```
-
-The key difference from `organize`: **there is no dry-run gate and no `--ai-provider` option.** `apply` always mutates
-the filesystem immediately — HIGH-confidence bundles only by default, or also actionable medium/low bundles with
-`--yolo`. Use `organize` if you want the safety of a default dry run; use `apply` only when you deliberately want the
-older, always-apply behavior.
-
 ### `resolve-low-confidence DIR [--ai-provider openai] [--model MODEL]`
 
 Print optional AI suggestions for whatever is currently in the plan's `review_bundles` (i.e. non-HIGH-confidence bundles
@@ -247,7 +235,7 @@ everywhere else, signaling "unimplemented" rather than a runtime failure.
 
 ### The "attention" section
 
-Shared by `organize` (yolo-apply path), `apply`, and `prepare-kindle` (`_print_attention`, `cli.py:263`):
+Shared by `organize` (yolo-apply path) and `prepare-kindle` (`_print_attention`, `cli.py:263`):
 
 - **`Attention after organization: N book(s)`** — every bundle whose overall confidence isn't `HIGH`, whether or not it
   was actually moved. This is where manual review happens, inside the already-restructured library.
@@ -269,7 +257,6 @@ Shared by `organize` (yolo-apply path), `apply`, and `prepare-kindle` (`_print_a
 | Let an agent (Claude/Codex/etc.) decide programmatically what to do next        | `organize DIR --output-dir OUT --yolo --dry-run --json`     |
 | Get AI opinions on the borderline books without committing to anything          | `resolve-low-confidence DIR`                                |
 | Let AI suggestions feed directly into the plan (still capped at MEDIUM)         | `organize DIR --output-dir OUT --yolo --ai-provider openai` |
-| Reproduce the older always-apply behavior (no dry-run gate)                     | `apply DIR --output-dir OUT [--yolo]`                       |
 | Get a CSV manifest of high-confidence books only, without reorganizing anything | `prepare-kindle DIR --manifest FILE.csv`                    |
 
 ## 5. AI provider integration (`ebook_utils/ai.py`)
@@ -326,7 +313,7 @@ Shared by `organize` (yolo-apply path), `apply`, and `prepare-kindle` (`_print_a
 
 - `tests/test_cli.py` currently has only **2 tests**, both covering `organize` (dry-run-by-default behavior,
   `--yolo --copy`, `--yolo` real move). There is currently no CLI-level test coverage for `info`, `scan`, `plan`,
-  `apply`, `resolve-low-confidence`, `prepare-kindle`, or `sync-notion` — worth keeping in mind if you're relying on
+  `resolve-low-confidence`, `prepare-kindle`, or `sync-notion` — worth keeping in mind if you're relying on
   those commands for something critical.
 - MOBI, Notion sync, and Kindle upload are intentionally out of scope for the organization workflow (per `README.md`) —
   `sync-notion` is a stub, and there's no MOBI extractor.
